@@ -1,0 +1,480 @@
+---
+title: "Re-analysis of bird abundance estimates"
+author: "Lilly Melzl and Naomi Wiseman-Beese"
+date: "2026-02-28"
+output: pdf_document
+header-includes:
+  - \usepackage{float}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Aborted Former Analysis
+
+Before turning to Callaghan et. al., our initial plan was to work with Forzieri et.al. (2021), which examined emergent vulnerability to climate‑driven disturbances in European forests. We began by downloading the available data and reconstructing their workflow, including understanding and translating parts of their C++/MATLAB code into R. As we progressed, it became clear that the model relied on several additional data sets that were not included in the original data description. These data sets were mentioned only in an appendix or implicitly referenced in the code. When we attempted to access them, many of the links were inactive or pointed to decommissioned sources, and in several cases the data sets that were still available no longer matched the spatial or temporal coverage of the original analysis.  
+
+At the same time, we discovered that parts of the analysis code were missing. The authors confirmed that three different contributors had developed separate components of the workflow, and not all of these components were available to share. Crucially, the missing material affected the data preprocessing steps and the procedures used to generate the training and testing data sets, the exact sections we intended to reanalyse. Because these gaps made a faithful and rigorous replication impossible, we ultimately shifted our focus to Callaghan et.al.
+
+
+# Introduction
+
+Estimating the global abundance of species is essential when working in ecology and conservation (Gray et al. 2016, Magurran et al. 2003). The authors Callaghan C.T., Nakagawa S. and Cornwell W.K. tried to estimate the global number of birds, in their study "Global abundance estimates for 9,700 bird species" from 2021. Their goal was to provide a repeatable and scaleable method, which can be used as a blueprint for estimating species-specific global abundance distributions for any taxa.  
+To estimate the global number of birds the authors integrated citizen-science observations (eBird) and data from well-studied species collected by experts (BirdLife International, British Trust for Ornithology and Partners in Flight), used as training data. Validating the generalizability of the citizen-science data, they modeled the relationship between the two data sets using a hierarchical Bayesian model, showing how abundance estimates can be generalized for areas, where no expert-derived data is available. Using missing data theory, they impute densities for data-poor species via multiple imputation. Imputation is based on densities of well-studied species and extended to 9,700 species by modelling density as a function of detectability‑related traits (color, body size, threat status, flock size), species’ range size and sampling bias. Species range size is provided by BirdLife International for most species (BirdLife International Datazone 2026). Species without listed range size were assumed to only occur in sampled areas. Sampling bias was addressed by weighting densities accounting for geographic sampling bias. Under the assumption that density is defined as the abundance divided by species range, global abundance per species was obtained by combining imputed and observed densities with species’ geographic ranges.  
+Applying this framework to 9,700 bird species (~92% of all extant birds), the authors estimated a median of about 50 billion individual birds on Earth. Additionally, the authors show that global bird abundance follows a strongly left-skewed log distribution, with many rare species and relatively few very common ones.    
+The modeling approach, the imputation and the overall workflow were validated by using external checks, comparison of observed vs. imputed densities and leave-one-out cross-validations, showing high predictive power for the Bayesian model (R² = 0.78) and imputation (marginal R² = 0.84) and reasonable performance at the spatial level (R² = 0.48), always accounting for standard errors.  
+
+Our focus when reading the paper fell onto two points:  
+1. The input for the model included rarely observed species, which may have too little data to make informative population estimates. However they were included in the training data for the analysis and it was tested whether excluding rarely observed species changes the outcome.  
+2. To account for uncertainty in abundance-density relationships the authors fixed the slope intercept correlation to a fixed value of -1. To understand this further and verify it's necessity various other methods were used to test this.  
+After addressing how the analysis of the paper can be reconstructed, the two procedures will be explained in more detail. Finally a conclusion of the study's solidity will be provided.  
+
+## Additional note:
+Please note that code will only be included in the reanalysis section, and not for the entire document. The description of what is occurring in the code is quite robust and can allow the reader to easily follow in the code the analyses we go into detain of. All code can be found within the folders of the subsections of the paper and are mentioned in each section before we dive deep into them.
+
+
+# Reproducing estimation of global bird abundance 
+
+The data and code used for the study is available on the website Zenodo https://doi.org/10.5281/zenodo.4723365. For the analysis the files are too large to include in the GitHub repository, which is why they were not included in the file structure. Files needed for re-analysis can be found under the Zenodo link. Files with modification suggestions are not available online, but can be requested by sending an email to lilly.melzl@email.uni-freiburg.de or naomi.wiseman-beese@email.uni-freiburg.de.
+
+## Data preparation
+*corresponding scripts can be found in folders 1 to 5*
+
+Most data was extracted directly from the files provided in Zenodo. However some parts of the data had to be extracted or adjustments had to be made, which is described below. 
+
+The training data set, consisting of 724 species,was assembled from multiple expert-derived regional sources, including the British Trust for Ornithology for Great Britain (Musgrove et al. 2013), Partners in Flight for North America (Will et al. 2019), and BirdLife International for global data (BirdLife International Datazone 2019). Each source provided population estimates generated using different methodologies, resulting in distinct requirements for analysis (see Supplementary Information or the provided R scripts for details). For all three sources, abundance values for the training species were extracted from eBird data, which were used for further analysis. Species names were first compiled separately for each data set, using scripts in the folder “1_extract_species_data.” Relative abundance values were then calculated by summarizing monthly eBird records for the species list obtained in step 1, using scripts in the folder “2_calculate_eBird_abundance.”
+
+Preparing the species range sizes, the authors used geojsons, provided by BirdLife International (BirdLife International Datazone 2026) as base to calculate the range size for each species. They only kept species estimates made for < 60,000 square miles to reduce computational restrictions. These corresponding R scripts can be found in the folder "3_species_range_size".
+
+In addition the effort invested in each eBird observation was compiled, by extracting the sampling duration, distance, area and number of observers. This was done in the script "4_effort_data". For imputation across grid cells they also summarized the total number of minutes spent sampling in each grid, in the script "example_grid_stuff_with_bigquery".
+
+To enable subsequent analyses with different species traits — namely flock size, coloration (measured as distance from brown), body size and rarity (IUCN status) — they are being compiled and formatted to incorporate them in the rest of the data set. The corresponding scripts can be found in "5_bird_traits".
+
+However, most of the scripts referenced above can not be executed without access to the Google BigQuery API, as it is required to interact with the eBird data.
+
+
+## Detectability modelling 
+*corresponding scripts can be found in folder 6*
+
+Continuing with the species-specific relative abundance values from eBird the authors wanted to model the relationship between these and the density values of the training data. First they combined the data from the different training data sets in the file "prepare_file_for_detectability_modelling". With the combined data set they fitted a model, which estimates the detectability of the citizen-science data by defining density of the training data as a function of the relative abundance values from the citizen-science data, allowing for different abundance values for each bird species. The output of slopes and intercept per species is then in turn used in a function to determine species detectability, which can be reproduced in the script "detectability_modelling". Additionally, exploratory analyses were conducted on the data including visualisation of the relationship between density and relative abundance. However, as the change in data for the first re-analysis suggestion occurred in this step, the various analyses will be discussed in more detail he modification suggestions, when reducing the rare species bias. In the script "assessing_predicted_vs_observed_abundance" they explored the model output visually as well, by comparing observed vs predicted population estimates, which will also be discussed later on. In general it was found, that the model predicted the observed densities well with an R squared of 0.88.
+Decisions on how the Bayesian model was formed and justifications on why are being discussed in the script "brms_model_validation". Following reviewers’ suggestions, two model version are being compared with the original model, one excludes zero values and the other accounts for error in the response variable. As Figure 1 shows, the models are largely similar and thus the authors concluded the model is robust to the different decisions regarding data included in the final model. 
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Comparison of relative abundance from eBird data and observed densities in the expert-derived data for three different Bayesian models: including error in the response variable (orange), excluding zero values (blue) and the full model used in the paper (green)."}
+knitr::include_graphics("figures/detectability_modelling_comparison_brms_models.png")
+```
+
+
+## Abundance on spatial scale
+*corresponding scripts can be found in folder 7*
+
+Again the scripts in this section can not be executed due to a obligatory Google BigQuery account. For imputing data, the species abundance per grid cell is being used, which was being calculated in various steps, found in the folder "7_spatial_scale_abundance". Firstly a grid with 5, 10, 15 and 20 degree resolution was created in the file "make_grids_for_analysis", but only 5 degree resolution was kept for further analysis. Secondly they calculated the land mass per grid cell in the "area_calc" file and lastly extracted abundance values across grids in the file "extracting_abundance_data_from_ebird". For calculating the mean abundance per grid for each species, they only used grids, where more than 50 surveys were conducted and added zero values for grids, were species were not found. This requires the assumption that surveys were complete, suggesting non-occurrence of a species if the species was not identified in a survey. The mean abundances where then split into the months of the year to be able to differentiate between breeding and wintering populations. 
+
+
+## Multiple imputation
+*corresponding scripts can be found in folder 8*
+
+For the imputation, the authors started by preparing all the data for the imputation (see “prepare_file_for_imputation”). They combined all species-level information needed for imputation into one data set by merging taxonomy, body size, plumage colour, flock size, IUCN status, and detectability parameters, and then joining these traits with monthly abundance summaries from grid-level eBird data previously calculated in file “summarize_abundance_across_grids”. Using the detectability model’s intercepts and slopes, they calculated predicted density for each species in each grid cell by applying the fitted log-log abundance-density relationship. To propagate uncertainty in these predicted densities, the script simulated 10,000 draws of intercept-slope pairs from a manually constructed variance-covariance matrix. Crucially, the covariance term was defined using a fixed correlation of -1, producing the strongest possible negative dependence between intercept and slope. After adding land-area information and cleaning or transforming traits (ex: log-scaling mass, colour metrics, and flock size), they quantified missingness and extracted a species-level trait matrix. The result is a single, fully assembled data set which contains traits, detectability estimates, abundance summaries, density predictions, and associated uncertainty, structured and ready for multiple imputation.
+
+With this structured data set the authors prepared and ran a multiple imputation (see “do_imputation”). They finish the preparation of the file by selecting the relevant variables, transforming them into the appropriate scales, and converting species identities into an integer cluster variable. The cluster variable allows the imputation model to treat species as hierarchical units, so that species‑level traits are imputed using information shared across observations belonging to the same species. After inspecting the distribution of missing data, they built a predictor matrix that specifies which variables can be used to impute others, ensuring that identifiers and fully observed variables were excluded from being imputed. They then assigned two‑level predictive mean‑matching methods to species‑level traits and to observation‑level density and its uncertainty, because the data are hierarchical (grid cells nested within species), and the imputation method must respect this structure to avoid artificially inflating precision or biasing trait–density relationships. With this setup, they ran a multiple imputation procedure with 100 imputations over 20 iterations and saved the resulting imputation for later analysis.
+
+Finally, in the script file “summarize_imputation” the completed imputation is turned into abundance estimates for species, taxonomic groups, and ecological groups by combining imputed densities with spatial and checklist information. It begins by loading the imputed density values and merging them with species-grid metadata, range‑size adjustments, and ecological niche classifications. The script then collapses the 100 imputed data sets into a single set of mean grid‑level density estimates, combining imputation uncertainty with model‑based standard errors. After examining how density relates to checklist effort, it calculates weighted species‑level densities, generates 10,000 lognormal draws for each species to represent uncertainty, and multiplies these by species’ estimated geographic areas to obtain abundance distributions. Summing these draws yields global totals for all birds as well as species‑specific abundance estimates with confidence and highest‑density intervals. The same procedure is repeated for orders, families, biogeographic realms, trophic levels, trophic niches, and foraging niches. Finally, the script saves summary tables and example species distributions for use in figures and publication. This final step provides the full distribution of possible abundance values for each species and group, the uncertainty around those estimates, and how imputation uncertainty affects global and taxonomic-level abundance totals.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Weighted density for all 9700 species on a log10 scale, weighing them by the number of checklists (the number of checklists a species was divided by the number of total checklists in a grid cell), providing more confidence to species with more checklists."}
+knitr::include_graphics("figures/histogram_of_weighted_densities.png")
+```
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="(a) global median species abundance distribution, (b) example species abundance distributions, and (c) total distribution of the number of individual birds in the world."}
+knitr::include_graphics("figures/Figure_2.png")
+```
+
+As seen in Figure 2, the distribution of the checklist-weighted density (where species with more checklists receive greater weight and therefore greater confidence) appears approximately normally distributed. In contrast, Figure 3a shows that the species abundance distribution is left-skewed, and Figure 3c indicates that the global number of birds is likewise left-skewed. Additionally, Figure 3b presents example species-level abundance distributions.
+
+Together, these patterns indicate that although observational effort-weighted densities behave in a relatively symmetric and well-behaved manner, the underlying biological abundance structure remains strongly skewed and dominated by a minority of very abundant species. The checklist weighting therefore helps stabilize sampling variability but does not remove the intrinsic heavy-tailed structure of bird abundance. It is therefore important to consider how uncertainty is propagated when choosing an error propagation method, because different approaches may interact with this skewed abundance structure in different ways, potentially amplifying or compressing the upper tail and thereby influencing both species-level and global abundance estimates.
+
+
+
+## Workflow Validation
+*corresponding scripts can be found in folder 9*
+
+To evaluate whether the multiple imputation produced biologically plausible and statistically consistent values, Callaghan et al., performed 3 validations. The first was a leave-one-out analysis for the multiple imputations, the second was the brms model validation, and finally a complete workflow leave-one-out analysis. 
+
+The first leave-one-out analysis systematically removed observed density values for each species and rerand the imputation to test how well the model could recover known data, using the mice package. This procedure can be found in script “mice_validation_models”. This generates species-specific validation files that capture the distribution of imputed values under a controlled missingness. From these outputs, Callaghan et al. evaluated whether the imputation produced biologically plausible and statistically consistent estimates by comparing imputed densities against the true observed densities for species with known data (the training data set). This analysis can be found in the script “mice_validation_analysis”. After loading the imputed data sets and tagging each row as either observed or imputed, they visualized the distributions of imputed versus observed density estimates and their standard errors to check whether the imputations fell within realistic ranges (Figure 4). They then performed a more formal validation by extracting held‑out species, summarizing their imputed densities across all imputations, and comparing these summaries to the true observed densities at both the grid‑cell level and the species level. Mixed‑effects models and linear regressions quantified how well imputed values predicted observed ones, yielding high correlations at the grid level and moderate correlations at the species level (Figure 5). Additional checks examined whether observed values fell within the full or 95% ranges of the imputed distributions. Finally, the script compared how many grid cells species occupied in the training set versus the full data set to contextualize the difficulty of imputing densities for species with sparse data. What we learn from this script is that the imputation procedure produces values that closely track observed densities, captures appropriate uncertainty, and behaves reliably even when predicting for species with limited data, thereby supporting the validity of the imputed data set for downstream abundance estimation.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Density histograms showing the density of observations for both the density estimate of birds (left) and the standard error of the density estimate of birds (right) for both the observed values used in imputation (blue dashed line) and imputed values for ten random imputations (red lines)"}
+knitr::include_graphics("figures/imputation_check_of_plausible_values.png")
+```
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="The relationship between observed density and the mean imputed density among ten imputations for each unique species x grid combination (left panel) and for each species’ mean density across all grids (right panel)."}
+knitr::include_graphics("figures/mice_imputation_validation_plot.png")
+```
+
+When examining the results from the first leave-one-out analysis used to evaluate the imputations, Figure 4 visualizes the distributions of imputed versus observed density estimates and their associated standard errors to assess whether the imputations fall within realistic ranges. The results indicate that the imputed values generally do lie within plausible bounds. Additionally, Figure 5 shows that mixed-effects models and linear regressions quantify how well imputed values predict observed ones, yielding high correlations at the grid level and moderate correlations at the species level. Specifically, the species x grid combination achieved an R2 of 0.84, whereas the mean species-across-grids comparison yielded an R2 of 0.48. This pattern indicates that the imputation framework captures fine-scale spatial variation in density reasonably well but is less successful at recovering species-level central tendencies across grids. In other words, the model performs strongly at predicting where birds are relatively more or less abundant, but more uncertainty remains in estimating overall species abundance levels.
+
+The robustness of the Bayesian detectability model is evaluated by testing how different data-handling decisions affect parameter estimates. This can be found in the script “brms_model_validation”. After loading and cleaning the data set (including replacing problematic -Inf abundance values and missing standard errors), the workflow first inspects the relationship between eBird relative abundance and observed density. It then uses an existing large brms model as a benchmark, computing LOO (leave-one-out cross-validation) diagnostics and Bayesian R² to characterize model fit and extracting species-specific intercepts and slopes. A reduced version of the model (fewer chains and iterations) is then fit to confirm that shorter runs produce nearly identical estimates, justifying faster exploratory modelling. The script next performs targeted sensitivity analyses, where it refits the model after removing abundance zeros, and incorporates measurement error on the response (density). For each alternative specification, species-level random effects and their uncertainties are compared against the full model using scatterplots, regressions, and distributional checks. Overall, the analysis demonstrates that key parameter estimates are highly consistent across modelling choices, indicating that the detectability model is robust to reasonable data preprocessing decisions and that the primary conclusions are unlikely to be driven by treatment of zeros or measurement error.
+
+The complete workflow validation through leave-one-out analysis validates the modelling pipeline used to estimate species densities and global abundances when data are incomplete (see “brms_and_mice_validation_combined”). After loading and cleaning multiple data sets, abundances and uncertianties are standardizes and spatial and trait information needed for modelling are prepared. The key step is a leave-one-species-out procedure: for each focal species, the detectability model (fit with brms) is rerun without that species, species-specific parameters are extracted, and density is predicted across grid cells. Missing density values are then filled using multiple multiple imputation (mice) informed by ecological traits and sampling effort, with uncertainty propagated throughout via simulation and imputation variance.
+
+The resulting grid-level densities are weighted by checklist effort, scaled by species’ occupied area, and converted into distributions of total abundance. By comparing results when a species is excluded versus included in training, the analysis tests how well the modelling and imputation framework generalizes to data-poor species. Overall, the exercise shows whether the approach can reliably estimate population sizes under missing data and highlights how uncertainty and species traits influence the final abundance estimates.
+
+The final step in their analysis for the global bird abundances estimates is in “overall_workflow_analysis”, which evaluates the overall performance of the modelling and imputation workflow by comparing abundance estimates for species when they are included in the full analysis versus when they were previously withheld. It reconstructs the full-model results by collapsing multiple imputations, propagating uncertainty, weighting grid-level densities by checklist effort, and converting densities into species-level abundance distributions using occupied area. It then loads the saved outputs from the leave-one-species-out runs and summarizes both sets of results using medians and uncertainty bounds.
+
+The key validation step is a direct comparison of abundance estimates between the full model and the withheld-species runs. By plotting these values on log scales and fitting a linear model, the script quantifies how strongly the two approaches agree, providing an overall measure of model robustness (R²). Additional density plots for a random subset of species visually assess how closely the full and withheld distributions match. Together, these analyses test whether the workflow produces stable and generalizable abundance estimates, demonstrating whether the modelling and imputation framework performs reliably when species data are missing.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H',  fig.cap="Overall workflow validation comparing abundances from the full model with those from a withheld species within."}
+knitr::include_graphics("figures/overall_workflow_validation.png")
+```
+
+Figure 6 evaluates the overall workflow validation by comparing abundance estimates from the full model with those obtained when species were withheld during the leave-one-out procedure. The very high agreement between the two approaches (R^2=0.94) indicates that the modelling and imputation pipeline is highly robust to missing species data. In other words, the framework is able to recover abundance estimates for data-poor species that closely resemble those obtained when full information is available. This strong correspondence suggests that the combined detectability modelling and multiple imputation workflow generalizes well across species and that the propagation of uncertainty through the pipeline is broadly coherent. The result provides important support for the use of the framework in estimating global bird abundances when data is missing.
+
+
+## Other analysis
+
+A section of the paper is dedicated to phylogenetic representation across global species abundances. Since it is not part of our re-analysis it will not be included in this document.  
+
+
+# Modification suggestions
+*corresponding scripts can be found in folder 10*
+
+## Rare species bias
+
+Some species are observed very rarely, which may prohibit informed population estimates and contributes disproportionately noisy information to the model (Robinson et al. 2017). Even though this was mentioned by the authors as a limitation, the data used as training data still included rarely observed species. Since the input data used for the Bayesian model is the basis for the entire analysis, changing this could affect the entire pipeline. Thus, reducing the rarely observed species could change the outcome of the study fundamentally. In order to look at this issue more closely a function was added to sum up observations per species and to remove any observations below a certain percentage in the file "prepare_file_for_detectability_modelling":
+
+```{r, eval=FALSE}
+obs_percentage <- function(percentage){
+  spec_obs <- bind_rows(NA_mod_df, GB_mod_df, Birdlife_mod_df) %>% 
+    rename(species = COMMON_NAME) %>%
+    group_by(species) %>% 
+    summarise(total_obs_sum = sum(total_obs, na.rm = TRUE)) %>%
+    ungroup() %>% 
+    filter(total_obs_sum >= quantile(total_obs_sum, percentage))
+  
+  mod_df <- mod_df %>% 
+    filter(species %in% spec_obs$species)
+  
+  return(mod_df)
+}
+```
+
+Originally species with less than 2%, 5%, 10% and 15% of observations were removed, but due to time constraints and insufficient difference between each modification, the analysis was only continued with the reduction of 15%. Removing 1371 data points from the actual 8735, left 7364 data points for the analysis with the reduced data set. Species-wise this indicated that from 724 training species 109 were removed and 615 species were used for the model run with reduced data. When looking at the rarity of the removed species (see table 1) it becomes clear that in fact the rarely observed species are mostly rare species, due to being endangered to some degree. This however, does not necessarily explain their rare observations.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+library(knitr)
+
+iucn_table <- data.frame(
+  `IUCN category` = c(
+    "Least Concern (LC)",
+    "Near Threatened (NT)",
+    "Vulnerable (VU)",
+    "Endangered (EN)",
+    "Critically Endangered (CR)"
+  ),
+  `N for all` = c(337, 43, 82, 80, 35),
+  `N for removed data` = c(0, 8, 19, 34, 20)
+)
+
+kable(iucn_table, caption = "Number of species per IUCN category")
+```
+
+The analysis described above in the reproduction section was continued with the reduced training data set and the change in output was analysed. Firstly the input of training data in the model was checked, by comparing the relative abundance values from the eBird data with the observed densities from the expert derived data (Figure 7). The figure suggests that the slopes change more than the intercepts, when reducing the data, but that the overall change is fairly small.
+
+```{r, echo=FALSE, out.width="50%", fig.show='hold', fig.pos='H', fig.cap="Comparison of relationship between observed density and eBird relative abundance for full (N = 724), on the left, and reduced data set (N = 615), on the right, used in the brms modelling. The orange line represent 20 posterior draws from the model fit representing fixed effects."}
+knitr::include_graphics(c("figures/training_data_density_vs_abundance.png", "figures/training_data_density_vs_abundance_15p.png"))
+```
+
+When comparing the output of the model, the close correspondence of points to both lines for both data sets (Figure 8) indicates that the model captures the observed population estimates well, and that reducing the training data has minimal effect on predictive performance. 
+
+```{r, echo=FALSE, out.width="50%",  fig.show='hold', fig.pos='H', fig.cap="Relationship between predicted and observed population estimates for full, on the left, and reduced data set, on the right, using intercept and slope from brms model. The orange line represents a linear model fit, whereas blue line represents line with slope = 1 and intercept = 0."}
+knitr::include_graphics(c("figures/observed_vs_predicted_density_of_training_species.png", "figures/observed_vs_predicted_density_of_training_species_15p.png"))
+```
+
+After getting the final output from the imputations across grids, the overall patterns are very similar between the full and reduced data sets (Figure 9). The reduced data set shows a slightly shallower slope in the observed vs. imputed densities, suggesting a minor dampening of the relationship, but the overall correspondence remains strong. Model fit slightly decreases with a R2 of 0.84 to 0.76 for the species–grid combinations and slightly improves for the species’ mean density across grids with 0.59 instead of 0.48. This indicates that removing rare species slightly improves the overall prediction of species-level tendencies across grids, but capturing fine-scale variation in density deteriorates slightly.
+ 
+```{r, echo=FALSE, fig.show='hold', out.width="80%", fig.pos='H', fig.cap="Relationship between observed density and mean imputed density among ten imputations for each species grid combination (left panel) and species' mean density across al grids (right panel). Again full (top Figures) reduced (bottom Figures) data set are compared."}
+knitr::include_graphics(c("figures/mice_imputation_validation_plot.png", "figures/mice_imputation_validation_plot_15p.png"))
+```
+
+The results in Figure 10 indicate that reducing the data set has only a minor effect on the overall abundance patterns. In each case, the distributions remain strongly left-skewed on the log scale, suggesting that the underlying structure is largely preserved despite the data reduction. The reduced data set shows a slightly less pronounced skew, which may reflect the removal of extreme values or sparsely represented species, but this change is modest and does not alter the general distributional shape.
+The main numerical difference is a shift in the median estimate, which increases from 50 billion to 66 billion after the data set is reduced. While this indicates some sensitivity of central tendency to data selection, the consistency in distribution shape suggests that the overall conclusions are robust to this modification.
+
+```{r, echo=FALSE, out.width="50%", fig.show='hold', fig.pos='H', fig.cap="Abundance distribution per species (left) and distribution of global number of individual birds (right) compared with the two data sets."}
+knitr::include_graphics(c("figures/comparison_hist_top.png", "figures/abund_comp.png"))
+```
+
+In conclusion, modifying the training data set has only a minor impact on both the model outcomes and the imputation results. The overall abundance distributions remain largely unchanged and the observed shifts in median values are modest. This suggests that the analysis in the original study is robust with respect to the composition of the training data, supporting the reliability of their conclusions on species abundance distributions.
+
+## Fixed correlation
+
+### The issue and what was changed
+
+As mentioned in the Multiple Imputation section of the reproduction chapter of this reanalysis, the original script hard-codes the intercept-slope correlation to -1, without explanation nor justification. This choice is not derived from the bayesian model, nor from the posterior samples; rather, the code directly passes cor = -1 into the uncertainty function when constructing the covariance matrix. Because the assumed correlation between intercept and slope determines the shape of the simulated parameter cloud, and therefore the width of the resulting density uncertainty intervals, this choice has direct consequences for the downstream imputation. A fixed correlation of -1 represents the strongest possible negative dependence, and thus yields the widest possible uncertainty envelopes for a given pair of standard errors. Given both the lack of justification and the potential influence on the results, this assumption warranted closer scrutiny. To evaluate sensitivity to this choice, three alternative uncertainty propagation approaches were implemented while keeping the rest of the pipeline unchanged. 
+
+The first approach was a simple sensitivity analysis in which the only modification to the original code was replacing the fixed correlation of -1 with a fixed correlation of -0.5.(see “file_for_imputation_m05”). As shown in the standard-error code below, the getSE function was otherwise left unchanged: the variance-covariance matrix was still constructed from the intercept and slope standard errors, the same simulation procedure was used, and uncertainty was extracted in the same manner. This design isolates the effect of relaxing the extreme negative dependence assumed in the original analysis.
+
+
+```{r eval=FALSE}
+getSE <- function(species_name, cor =  -0.5, sim_N = 10000){
+  
+  spp <- joined_dat %>%
+    dplyr::filter(ebird_COMMON_NAME == species_name)
+  
+  # now add a subsection to apply this across every grid
+  # that a species occurs in
+  grid_split_function <- function(id_of_grid, species_name) {
+    
+    dat <- spp %>%
+      dplyr::filter(grid_id == id_of_grid)
+    
+    # prep for our varaince-covariance matrix
+    cov <- dat$slope_se*dat$intercept_se*cor
+    int_v <- dat$intercept_se^2  
+    slo_v <- dat$slope_se^2
+    
+    vcv <- matrix(c(int_v, cov, cov, slo_v), nr = 2)
+    beta <- c(dat$intercept,dat$slope)
+    
+    # 10000s of the intercept-slope pairs
+    beta_sim <- rmvnorm(sim_N, beta, vcv)
+    
+    # creating the desgin matrix
+    x <-cbind(1, dat$log10_mean_abund)
+    
+    # some matrix algebra
+    xb <- x %*% t(beta_sim)
+    
+    predicted_density <- apply(xb,1,quantile, probs = c(.5,0.8413448)) %>%
+      t() %>%
+      as.data.frame()
+    
+    se <- data.frame(grid_id=id_of_grid,
+                     se=predicted_density[,2]-predicted_density[,1])
+    
+    return(se)
+  }
+  
+  # apply over grids
+  species_summary <- bind_rows(lapply(unique(spp$grid_id), grid_split_function)) %>%
+    mutate(ebird_COMMON_NAME=species_name)
+  
+  return(species_summary)
+  
+}
+```
+
+The second approach, the Gaussian method (see "file_for_imputation_gaussian”), propagates uncertainty directly from the fitted Bayesian detectability model into predicted uncertainty for each species-grid density estimate. First, the fixed-effect posterior information from the previous brms model is extracted, specifically the intercept and slope estimates and their variance-covariance matrix (vocv(brms_mod)). These parameters are treated as jointly multivariate normal. The function simulate_gaussian() then generates many random draws from this multivariate normal posterior using rmvnorm(), where each draw represents one plausible intercept-slope pair consistent with the fitted model. Next, the function predict_se(beta_sim, x) propagates thar paratemer uncertainty into prediction space. Meaning, for a given abundance value of x, it:
+* computes predicted log-density for every simulated coefficient pair,
+* yields a distribution of predicted values rather than a single plot,
+* calculates the spread of that distribution using the different between the 50th ad the 84.13th percentile (approx. one standard deviation for a normal distribution).
+
+This difference is taken as the prediction standard error (SE) for each species-grid combination. Subsequently, the main loop applies this procedure to every observed species-grid pair in the training data and these SEs are merged back into the data set and saved longside the density estimates, so the later imputation step incorporates appropriate uncertainty. This approach is advantageous, because it preserves Bayesian parameter uncertainty while accounting for the intercept-slope covariance, produces prediction-level uncertainty rather than just model-level uncertainty, and avoids the hassle and time needed to refit the model repeatedly. 
+
+```{r eval=FALSE}
+coef_names <- colnames(vcov(brms_mod))
+intercept_name <- coef_names[coef_names == "Intercept"]
+slope_name <- coef_names[coef_names != "Intercept"]
+stopifnot(length(slope_name) == 1)
+
+simulate_gaussian <- function(n = 10000) {
+  vcv <- vcov(brms_mod)[
+    c(intercept_name, slope_name),
+    c(intercept_name, slope_name)
+  ]
+  mu <- fixef(brms_mod)[
+    c(intercept_name, slope_name),
+    "Estimate"
+  ]
+  rmvnorm(n, mu, vcv)
+}
+
+training_dat <- joined_dat %>% filter(!is.na(log10_density))
+data_for_imputation <- joined_dat %>% filter(is.na(log10_density))
+
+grid_area <- readRDS("Data/Spatial_data/grid_percent_land.RDS") %>%
+  select(ID, percentage) %>%
+  rename(grid_id = ID) %>%
+  st_set_geometry(NULL)
+
+UNCERTAINTY_METHODS <- list(
+  gaussian = function(d) {
+    simulate_gaussian()
+  }
+)
+
+for (method in names(UNCERTAINTY_METHODS)) {
+  
+  message("Running uncertainty method: ", method)
+  
+  SEs <- bind_rows(lapply(unique(training_dat$ebird_COMMON_NAME), function(sp) {
+    
+    spp <- training_dat %>% filter(ebird_COMMON_NAME == sp)
+    
+    bind_rows(lapply(unique(spp$grid_id), function(g) {
+      
+      d <- spp %>% filter(grid_id == g)
+      beta_sim <- UNCERTAINTY_METHODS[[method]](d)
+      
+      data.frame(
+        ebird_COMMON_NAME = sp,
+        grid_id = g,
+        se = predict_se(beta_sim, d$log10_mean_abund)
+      )
+    }))
+  }))
+  
+  out <- bind_rows(
+    training_dat %>% left_join(SEs, by = c("ebird_COMMON_NAME", "grid_id")),
+    data_for_imputation %>% mutate(se = NA)
+  ) %>%
+    left_join(grid_area, by = "grid_id")
+  
+  attr(out, "uncertainty_method") <- method
+  attr(out, "generated_on") <- Sys.time()
+  
+  saveRDS(
+    out,
+    paste0("Intermediate data files/file_for_imputation_", method, ".RDS")
+  )
+}
+```
+
+The third and final approach was a posterior method (see “file_for_imputation_posterior”) propagates full species-level posterior uncertainty from the fitted Bayesian model into grid-level estimates. After loading the brms model, the full posterior draws of the species random effects (intercepts and abundance slopes) are extracted without summarization, thereby preserving the complete posterior distribution for each species. The species trait table and species-grid abundance summaries are then rebuilt in the same structure used for imputation to ensure compatibility with downstream workflows.
+
+The core step is the getSE_fast() function, which efficiently computes predicted log-density and its uncertainty for each species-grid combination by combining the species-specific posterior draws with the observed log-abundance values. Using matrix operations (outer()), the function generates the posterior predictive distribution of density, from which it takes the median as the point estimate and the standard deviation as the prediction SE. This procedure is repeated for all species present in both the data and the model, producing a data set in which each grid cell’s density estimate reflects the full hierarchical posterior. Overall, this approach provides a computationally efficient way to carry forward species-level Bayesian uncertainty into the imputation stage, improving the statistical coherence of subsequent analyses. Please note that ChatGPT  was used to assist with portions of the implementation, especially the getSE_fast() function, to ensure the resulting .rds file matched the structure require for downstream imputation. 
+
+```{r eval=FALSE}
+fit <- readRDS("Intermediate data files/brms_mod.rds")
+
+re <- ranef(fit, summary = FALSE)
+
+species_array <- re$species  # draws × species × 2
+species_names <- dimnames(species_array)[[2]]
+
+intercept_draws <- species_array[, , "Intercept"]
+slope_draws     <- species_array[, , "meabundance_log10abundance_SD_log10"]
+
+getSE_fast <- function(sp){
+  
+  spp_data <- joined_dat[joined_dat$species == sp, ]
+  
+  if(nrow(spp_data) == 0) return(NULL)
+  
+  sp_index <- match(sp, species_names)
+  
+  int_draws <- intercept_draws[, sp_index]
+  slo_draws <- slope_draws[, sp_index]
+  
+  x <- spp_data$abundance_log10
+  
+  eta <- outer(int_draws, rep(1, length(x))) +
+    outer(slo_draws, x)
+  
+  data.frame(
+    grid_id = spp_data$grid_id,
+    species = sp,
+    log10_density = apply(eta, 2, median),
+    se = apply(eta, 2, sd)
+  )
+}
+
+species_list <- intersect(unique(joined_dat$species),
+                          species_names)
+
+SEs_1 <- do.call(
+  rbind,
+  lapply(species_list, getSE_fast)
+)
+
+joined_dat_final <- joined_dat %>%
+  left_join(SEs_1,
+            by = c("grid_id", "species"))
+
+saveRDS(joined_dat_final,
+        "Intermediate data files/file_for_imputation_posterior.RDS")
+```
+
+
+### Results
+
+As mentioned above, all resulting simulations were conducted following the same script as in do_imputation, they are named following the approach used, either m05, gaussian, or posterior.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Intercept-slope uncertainty clouds for the Acadian Flycatcher."}
+knitr::include_graphics("figures/uncertinaty_cloud.png")
+```
+
+As seen in Figure 11, the uncertainty clouds across the different approaches are clearly distinguishable. The -1 correlation behaves as expected, strictly following a straight, strongly negative trade-off: when uncertainty in the intercept increases, uncertainty in the slope decreases. The -0.5 correlation also shows a negative relationship, but the cloud is more elliptical, indicating that greater joint variability between the parameters is permitted under this assumption. As such, we would expect the -0.5 approach to yield moderately narrower and more realistic uncertainty intervals than the -1 case, which represents an extreme and highly constraining dependency.
+
+Surprisingly, the Gaussian approach produces a small, positively oriented cloud with very limited spread. This indicates that the posterior uncertainty in the fitted model is highly constrained. As a result, we would expect this method to generate the narrowest prediction standard errors and therefore the most precise (but potentially overconfident) density uncertainty estimates among the approaches considered.
+
+Finally, the posterior cloud, like the Gaussian, shows a positive relationship but with substantially greater spread, allowing for more variability in the joint uncertainty of the intercept and slope parameters across species. We would therefore expect this approach to produce uncertainty estimates that are wider and more data-adaptive than those from the -1 and -0.5 fixed-correlation approaches, and substantially wider and more realistic than those from the Gaussian approach.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Species median abundance density curves along the log10 scale."}
+knitr::include_graphics("figures/species_abundance_density_2.png")
+```
+
+When examining the species median abundance densities (Figure 12), the Gaussian, -1, and -0.5 fixed-correlation approaches do not vary substantially. Of the three, the -1 correlation shows the highest peak density, but the overall peak locations and spreads are quite similar. This indicates that the central tendency of the density estimates is relatively insensitive to the assumed intercept–slope correlation, and that the main impact of the correlation choice is on uncertainty structure rather than on median predictions. In contrast, the posterior approach differs markedly. It exhibits an initial shoulder followed by a sharper and narrower peak compared to the other approaches. This suggests that incorporating full species-level posterior uncertainty introduces heterogeneity in how uncertainty propagates across species-grid combinations, likely reflecting the hierarchical structure of the fitted Bayesian model rather than a single global uncertainty pattern. It is therefore important to consider the source and structure of uncertainty when choosing how to propagate it, because simplifying assumptions (such as fixed correlations or Gaussian approximations) may preserve point estimates while materially altering the distribution and realism of uncertainty carried forward into the imputation stage.
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Global bird abundance distributions."}
+knitr::include_graphics("figures/species_density_histogram.png")
+```
+
+As seen in Figure 13, the global bird abundance distributions vary across the different approaches. As expected, the distributions from the -1 and -0.5 uncertainty propagation methods are very similar, with the -1 approach appearing slightly more left-skewed but otherwise closely matching in both peak location and spread. This similarity suggests that moderate changes in the assumed intercept–slope correlation have limited influence on the aggregate abundance distribution.
+In contrast, the Gaussian approach shows a markedly higher peak and a noticeably narrower overall distribution. This pattern indicates that the Gaussian approximation is producing more concentrated (so less variable) abundance estimates, consistent with the earlier observation that this method yields tightly constrained uncertainty clouds from Figure 11.
+Finally, the posterior approach produces a higher peak than the -1 and -0.5 methods while maintaining a somewhat narrower spread and a more pronounced left skew. This would indicate that propagating full hierarchical posterior uncertainty alters not only the width of the distribution but also its shape, likely reflecting species-level heterogeneity that is not captured by the simpler fixed-correlation or Gaussian approximations.
+It is therefore important to consider how uncertainty is represented and propagated when choosing an approach, because different assumptions can lead to similar central estimates while materially changing the dispersion and skewness of global abundance outcomes, which in turn may influence downstream ecological inference and imputation behavior.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+library(knitr)
+
+corr_methods_table <- data.frame(
+  `Method` = c(
+    "Unedited",
+    "-0.5",
+    "Gaussian",
+    "Posterior"
+  ),
+  `Median` = c(50, 61, 65, 20),
+  `Mean` = c(428, 518, 230, 68)
+)
+
+kable(corr_methods_table, caption = "Global median and mean bird abundance estimates by uncertainty propagation method. Values are provided in billions.")
+```
+
+The results from Figures 12 and 13 demonstrate that the choice of uncertainty propagation method materially affects global bird abundance estimates. As reported by Callaghan et al., the original analysis estimated a median global abundance of approximately 50 billion birds and a mean of 428 billion. Under the -0.5 uncertainty propagation approach, the median increases to 61 billion and the mean to 518 billion birds (Table 2). The Gaussian approach further increases the median to 65 billion birds, while substantially reducing the mean to 230 billion (Table 2). In contrast, the posterior approach markedly reduces global abundance estimates, yielding a median of 20 billion birds and a mean of 68 billion (Table 2). This pattern indicates that the method used to represent and propagate uncertainty does not merely affect interval widths but can substantially shift both central tendency and tail behavior of the global abundance distribution. In particular, approaches that constrain uncertainty (such as the Gaussian approximation) appear to concentrate estimates and reduce extreme upper-tail realizations, whereas propagating full hierarchical posterior uncertainty redistributes mass toward lower abundance outcomes and compresses the upper tail. It is therefore essential to consider the statistical realism and structural assumptions of the uncertainty propagation method, because these choices directly influence aggregate abundance estimates and may meaningfully alter ecological interpretation and conservation conclusions.
+
+### Validation
+
+```{r, echo=FALSE, out.width="100%", fig.pos='H', fig.cap="Density histograms showing the density of observations for both the density estimate of birds (left) and the standard error of the density estimate of birds (right) for both the observed values used in imputation (blue dashed line) and imputed values for ten random imputations (red lines). A is for the fixed -0.5 approach, B for the Gaussian approach, and C for the posterior approach."}
+knitr::include_graphics("figures/Compilation.png")
+```
+
+Unfortunately, due to the substantial computational burden of the MICE validation procedure on our available hardware, it was not feasible to fully validate the new models within the project timeframe. Preliminary timing based on the first few leave-one-out runs indicated that completing the validation across all training species and all three uncertainty propagation methods would require approximately 28.5 days of continuous computation. Given these constraints, we were unable to obtain formal performance metrics such as cross-validated R2. Nevertheless, a qualitative comparison of model behavior was still possible (Figure 14). While these visual diagnostics provide useful insight into relative differences among approaches, the absence of full validation means that the results in this section should be interpreted with appropriate caution. In particular, without complete cross-validation, we cannot make definitive claims about the predictive superiority of any given uncertainty propagation method. However, visually it is still apparent that the imputed results from the different approaches fit the observed results relatively well and similarly.
+
+
+# Conclusion
+
+In conclusion, the approach presented by Callaghan et al. (2021) constitutes a rigorous and innovative framework for estimating global bird abundance, combining expert-derived knowledge with citizen-science data in a methodologically thoughtful way. The study is thoroughly documented, demonstrates careful consideration of uncertainties arising from heterogeneous data sources, varying time windows and differing sampling methods, and incorporates reviewers’ suggestions through additional model comparisons and validation checks. Our reanalysis supports many of the main findings and indicates that the overall modelling framework is robust, particularly with respect to changes in the training data set.
+
+Nevertheless, several limitations affect the broader robustness, generalizability, and reproducibility of the results. Extrapolating global patterns from regionally constrained data can introduce bias, especially for species that occur primarily in under-sampled regions. The assumption that species lacking range-size information occur only within sampled areas may further distort estimates. In addition, full reproducibility is constrained by technical barriers: access to Google BigQuery is required to run the workflow, the current eBird data format does not directly match the provided analysis pipeline, and the data set size (>200 GB) makes small-scale replication on standard hardware impractical. While these issues could be mitigated with appropriate infrastructure, they nonetheless limit accessibility and transparency.
+
+Importantly, our reanalysis also shows that modelling decisions, particularly how parameter uncertainty is specified and propagated such as assumptions about correlations between slope and intercept, can meaningfully influence global abundance estimates. Different treatments of uncertainty produce noticeably different global abundance totals, even when overall patterns remain consistent. Taken together, these findings suggest that while the study represents a substantial advance in global biodiversity estimation, future work would benefit from closer look into uncertainty propagation and reproducibility, as these factors can substantially shape both numerical results and their interpretation in ecological and conservation contexts.
+ 
+
+# Literature
+
+BirdLife International Datazone (2026): http://datazone.birdlife.org/home. [last access: 23-02-2026]
+
+Callaghan, C.T., Nakagawa, S. & Cornwell, W.K., Global abundance estimates for 9,700 bird species. Proc. Natl. Acad. Sci. U.S.A., 118, e2023170118 (2021). https://doi.org/10.1073/pnas.2023170118. 
+
+Gray, C. L. et al., Local biodiversity is higher inside than outside terrestrial protected
+areas worldwide. Nat. Commun. 7, 12306 (2016).
+
+Magurran, A. E. & Henderson, P. A., Explaining the excess of rare species in natural
+species abundance distributions. Nature 422, 714–716 (2003).
+
+McElreath, R. (2020). Statistical Rethinking: A Bayesian Course with Examples in R and STAN (2nd ed.). Chapman and Hall/CRC. https://doi.org/10.1201/9780429029608
+
+Musgrove, A. et al., Population estimates of birds in Great Britain and the United Kingdom. British Birds 106, 64–100 (2013).
+
+Robinson, O.J., Ruiz-Gutierrez, V. & Fink, D., Correcting for bias in distribution modelling for rare species using citizen science data. Diversity and Distributions 24(4), 460-472 (2017).
+
+Will, T. et al., Handbook to the partners in flight population estimates database, version 3.0. PIF Technical Series (2019). http://pif.birdconservancy.org/PopEstimates/ 
